@@ -140,6 +140,18 @@ class BotConfig:
         self.ticker_price = None
         self.df_data = list(range(0,10)) #[0,1,2,3,4,5,6,7,8,9]
 
+# create dynamic variables
+        self.gtTime1 = None
+        self.gtTime2 = None
+        self.gtTime3 = None
+        self.gtTime4 = None
+        self.gtTime5 = None
+        self.pvlTime = None
+        self.buySgnlLength = None
+        self.buySgnlTime = None
+        self.sellSgnlLength = None
+        self.sellSgnlTime = None
+
         self.sim_smartswitch = False
 
         self.usekucoincache = False

@@ -93,9 +93,9 @@ def parser(app, coinbase_config, args={}):
             app.api_passphrase = coinbase_config['api_passphrase']
 
             valid_urls = [
-                'https://api.pro.coinbase.com/',
-                'https://api.pro.coinbase.com',
-                'https://public.sandbox.pro.coinbase.com',
+                'https://api.exchange.coinbase.com/',
+                'https://api.exchange.coinbase.com',
+                'https://public.sandbox.exchange.coinbase.com',
                 'https://public.sandbox.pro.coinbase.com/'
             ]
 

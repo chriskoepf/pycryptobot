@@ -99,6 +99,12 @@ class AppState:
         self.trailing_sell_immediate = False
         self.waiting_sell_price = 0
         self.closed_candle_row = -1
+# new variables added for custom strategies
+        self.nobuycandles = 0
+        self.time_until_close = 0
+#        self.rsi_xlwr_last = 0
+#        self.rsi_xupr_last = 0
+#        self.rsi_xma_last = 0
 
     def minimumOrderBase(self, base, balancechk: bool = False):
         self.app.insufficientfunds = False
@@ -117,7 +123,8 @@ class AppState:
                 raise Exception(f"Market not found! ({self.app.getMarket()})")
 
             base = float(base)
-            base_min = float(product["base_min_size"])
+#            base_min = float(product["base_min_size"])
+            base_min = float(0)
 
         elif self.app.getExchange() == Exchange.KUCOIN:
             resp = self.api.authAPI("GET", "api/v1/symbols")
@@ -190,7 +197,8 @@ class AppState:
             price = float(ticker["price"])
 
             quote = float(quote)
-            base_min = float(product["base_min_size"])
+#            base_min = float(product["base_min_size"])
+            base_min = float(0)
 
         elif self.app.getExchange() == Exchange.KUCOIN:
             resp = self.api.authAPI("GET", "api/v1/symbols")

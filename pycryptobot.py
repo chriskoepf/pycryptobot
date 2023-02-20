@@ -179,33 +179,45 @@ def execute_job(
     _state.iterations = _state.iterations + 1
 
     if not _app.isSimulation():
-        # check if data exists or not and only refresh at candle close.
+        # check if data exists in the dataframe, get historical data if it doesn't and only refresh historical data at candle close.
+        # _state.closed_candle_row is -1 if new historical data added and -2 when ticker row has been added
+
+        # determine time until candle close, for ticker and other check for signals
+        if len(trading_data) > 0:
+            _state.time_until_close = (
+                datetime.timestamp(
+                    trading_data.iloc[_state.closed_candle_row, trading_data.columns.get_loc('date')]
+                )
+                + _app.getGranularity().to_integer
+                - datetime.timestamp(datetime.utcnow())
+            )
+
+        # when we reach candle close, get historical data
         if (
             len(trading_data) == 0
-            or (len(trading_data) > 0
-                and (
-                    datetime.timestamp(
-                        datetime.utcnow()
-                    ) - _app.getGranularity().to_integer >= datetime.timestamp(
-                        trading_data.iloc[_state.closed_candle_row, trading_data.columns.get_loc('date')]
-                    )
-                )
-            )
+            or _state.time_until_close <= 0
         ):
             trading_data = _app.getHistoricalData(
                 _app.getMarket(), _app.getGranularity(), _websocket
             )
+            # historical data was updated, reset closed candle row and current price
             _state.closed_candle_row = -1
             price = float(trading_data.iloc[-1, trading_data.columns.get_loc('close')])
 
-        else:
+        # once dataframe exists, add ticker data to a new row and update on each iteration, except candle close
+        else: 
             # set time and price with ticker data and add/update current candle
             ticker = _app.getTicker(_app.getMarket(), _websocket)
-            # if 0, use last close value as price
-            price = trading_data["close"].iloc[-1] if ticker[1] == 0 else ticker[1]
+            # if ticker returns 0, use last close value as price
+            if ticker[1] == 0:
+                price = trading_data["close"].iloc[-1]
+            else:
+                price = ticker[1]
+#            print(price)
             _app.ticker_date = ticker[0]
-            _app.ticker_price = ticker[1]
-
+            _app.ticker_price = price
+            # if ticker row was already added, last candle close data is 1 row from end of dataframe
+            # once ticker row was added, we update it on each iteration with the new ticker data
             if _state.closed_candle_row == -2:
                 trading_data.iloc[-1, trading_data.columns.get_loc('low')] = price if price < trading_data["low"].iloc[-1] else trading_data["low"].iloc[-1]
                 trading_data.iloc[-1, trading_data.columns.get_loc('high')] = price if price > trading_data["high"].iloc[-1] else trading_data["high"].iloc[-1]
@@ -214,6 +226,7 @@ def execute_job(
                 tsidx = pd.DatetimeIndex(trading_data["date"])
                 trading_data.set_index(tsidx, inplace=True)
                 trading_data.index.name = "ts"
+            # ticker row was not already added and needs to be created with last candle and current ticker data
             else:
                 trading_data.loc[len(trading_data.index)] = [
                     datetime.strptime(ticker[0], "%Y-%m-%d %H:%M:%S"),
@@ -231,7 +244,8 @@ def execute_job(
                 trading_data.index.name = "ts"
                 _state.closed_candle_row = -2
 
-#        print(trading_data.iloc[-1])
+#        print(trading_data)
+#        print(trading_data["close"].iloc[-1])
     else:
         price = float(df_last["close"].values[0])
         if len(trading_data) == 0:
@@ -308,7 +322,7 @@ def execute_job(
                     _state.iterations = 1
 
                 trading_dataCopy = trading_data.copy()
-                _technical_analysis = TechnicalAnalysis(trading_dataCopy, _app.setTotalPeriods())
+                _technical_analysis = TechnicalAnalysis(trading_dataCopy, len(trading_data))
 
                 # if 'morning_star' not in df:
                 _technical_analysis.addAll()
@@ -319,7 +333,7 @@ def execute_job(
 
         elif _app.getSmartSwitch() == 1 and _technical_analysis is None:
             trading_dataCopy = trading_data.copy()
-            _technical_analysis = TechnicalAnalysis(trading_dataCopy, _app.setTotalPeriods())
+            _technical_analysis = TechnicalAnalysis(trading_dataCopy, len(trading_data))
 
             if "morning_star" not in df:
                 _technical_analysis.addAll()
@@ -328,7 +342,7 @@ def execute_job(
 
     else:
         trading_dataCopy = trading_data.copy()
-        _technical_analysis = TechnicalAnalysis(trading_dataCopy, _app.setTotalPeriods())
+        _technical_analysis = TechnicalAnalysis(trading_dataCopy, len(trading_dataCopy))
         _technical_analysis.addAll()
         df = _technical_analysis.getDataFrame()
 
@@ -493,15 +507,17 @@ def execute_job(
             if not _app.isSimulation():
                 # data frame should have 300 rows or equal to adjusted total rows if set, if not retry
                 Logger.error(f"error: data frame length is < {str(_app.setTotalPeriods())} ({str(len(df))})")
-                # pause for 10 seconds to prevent multiple calls immediately
-                time.sleep(10)
-                list(map(s.cancel, s.queue))
-                s.enter(
-                    300,
-                    1,
-                    execute_job,
-                    (sc, _app, _state, _technical_analysis, _websocket),
-                )
+# custom code - add setting for needed periods vs how many to pull
+                if len(df) < 200:
+                    # pause for 10 seconds to prevent multiple calls immediately
+                    time.sleep(10)
+                    list(map(s.cancel, s.queue))
+                    s.enter(
+                        300,
+                        1,
+                        execute_job,
+                        (sc, _app, _state, _technical_analysis, _websocket),
+                    )
 
     if len(df_last) > 0:
         now = datetime.today().strftime("%Y-%m-%d %H:%M:%S")
@@ -530,8 +546,11 @@ def execute_job(
             if _state.action == "check_action" and _state.last_action == "BUY":
                 _state.trade_error_cnt = 0
                 _state.trailing_buy = False
+                _state.nobuycandles = 0
                 _state.action = None
                 _state.trailing_buy_immediate = False
+                _app.pvlTime = None
+                _state.rsi_xma_last = 0
                 telegram_bot.add_open_order()
 
                 Logger.warning(
@@ -560,6 +579,8 @@ def execute_job(
                 _state.tsl_max = False
                 _state.trade_error_cnt = 0
                 _state.action = None
+                _app.pvlTime = None
+                _state.rsi_xma_last = 0
                 telegram_bot.remove_open_order()
 
                 Logger.warning(
@@ -611,7 +632,7 @@ def execute_job(
 
         # if simulation, set goldencross based on actual sim date
         if _app.isSimulation():
-            if _app.setTotalPeriods() < 200:
+            if len(df) < 200:
                 goldencross = False
             else:
                 goldencross = _app.is1hSMA50200Bull(current_sim_date, _websocket)
@@ -645,7 +666,7 @@ def execute_job(
         if _app.isSimulation():
             # Reset the Strategy so that the last record is the current sim date
             # To allow for calculations to be done on the sim date being processed
-            sdf = df[df["date"] <= current_sim_date].tail(_app.setTotalPeriods())
+            sdf = df[df["date"] <= current_sim_date].tail(len(df))
             strategy = Strategy(
                 _app, _state, sdf, sdf.index.get_loc(str(current_sim_date)) + 1
             )
@@ -654,9 +675,6 @@ def execute_job(
 
         trailing_action_logtext = ""
 
-        # determine current action, indicatorvalues will be empty if custom Strategy are disabled or it's debug is False
-        _state.action, indicatorvalues = strategy.getAction(_state, price, current_sim_date, _websocket)
-
         immediate_action = False
         margin, profit, sell_fee, change_pcnt_high = 0, 0, 0, 0
 
@@ -664,9 +682,9 @@ def execute_job(
         # To allow for calculations to be done on the sim date being processed
         if _app.isSimulation():
             trading_dataCopy = (
-                trading_data[trading_data["date"] <= current_sim_date].tail(_app.setTotalPeriods()).copy()
+                trading_data[trading_data["date"] <= current_sim_date].tail(len(trading_data)).copy()
             )
-            _technical_analysis = TechnicalAnalysis(trading_dataCopy, _app.setTotalPeriods())
+            _technical_analysis = TechnicalAnalysis(trading_dataCopy, len(trading_dataCopy))
 
         if (
             _state.last_buy_size > 0
@@ -723,6 +741,10 @@ def execute_job(
                 sell_taker_fee=_app.getTakerFee(),
             )
 
+        # determine current action, indicatorvalues will be empty if custom Strategy are disabled or it's debug is False
+        _state.action, indicatorvalues = strategy.getAction(df_last, _state, price, margin, current_sim_date, _websocket)
+
+        if _state.last_action == "BUY":
             # handle immediate sell actions
             if _app.manualTradesOnly() is False and strategy.isSellTrigger(
                 _app,
@@ -747,11 +769,15 @@ def execute_job(
             immediate_action = False
 
         # If buy signal, save the price and check for decrease/increase before buying.
-        if _state.action == "BUY" and immediate_action is not True:
+        if _state.action == "BUY" and immediate_action is not True and _app.getTrailingBuyPcnt() >= 0:
             _state.action, _state.trailing_buy, trailing_action_logtext, immediate_action = strategy.checkTrailingBuy(_state, price)
+
         # If sell signal, save the price and check for decrease/increase before selling.
-        if _state.action == "SELL" and immediate_action is not True:
+        if _state.action == "SELL" and immediate_action is not True and _app.getTrailingSellPcnt() <= 0:
             _state.action, _state.trailing_sell, trailing_action_logtext, immediate_action = strategy.checkTrailingSell(_state, price)
+
+        if _app.manualTradesOnly() is True:
+            _state.action = "WAIT"
 
         if _app.enableImmediateBuy():
             if _state.action == "BUY":
@@ -766,7 +792,7 @@ def execute_job(
         bullbeartext = ""
         if (
             _app.disableBullOnly() is True
-            or _app.setTotalPeriods() < 200
+            or len(df) < 200
             or df_last["sma50"].values[0] == df_last["sma200"].values[0]
         ):
             bullbeartext = ""
@@ -1020,7 +1046,7 @@ def execute_job(
                             + str(round(((price - df_high) / df_high) * 100, 2))
                             + "% "
                             + "away from DF HIGH | Range: "
-                            + str(df.iloc[_state.iterations - _app.setTotalPeriods(), 0])
+                            + str(df.iloc[_state.iterations - len(df), 0])
                             + " <--> "
                             + str(df.iloc[_state.iterations - 1, 0])
                         )
@@ -1117,7 +1143,7 @@ def execute_job(
                             + str(round(((price - df_high) / df_high) * 100, 2))
                             + "% "
                             + "away from DF HIGH | Range: "
-                            + str(df.iloc[_state.iterations - _app.setTotalPeriods(), 0])
+                            + str(df.iloc[_state.iterations - len(df), 0])
                             + " <--> "
                             + str(df.iloc[_state.iterations - 1, 0])
                         )
@@ -1197,9 +1223,9 @@ def execute_job(
                     Logger.debug(f"ema12gtema26: {str(ema12gtema26)}")
                     Logger.debug(f"ema12ltema26co: {str(ema12ltema26co)}")
                     Logger.debug(f"ema12ltema26: {str(ema12ltema26)}")
-                    if _app.setTotalPeriods() >= 50:
+                    if len(df) >= 50:
                         Logger.debug(f'sma50: {truncate(float(df_last["sma50"].values[0]))}')
-                    if _app.setTotalPeriods() >= 200:
+                    if len(df) >= 200:
                         Logger.debug(f'sma200: {truncate(float(df_last["sma200"].values[0]))}')
                     Logger.debug(f'macd: {truncate(float(df_last["macd"].values[0]))}')
                     Logger.debug(f'signal: {truncate(float(df_last["signal"].values[0]))}')
@@ -1377,8 +1403,11 @@ def execute_job(
                             if bal_error == 0:
                                 _state.trade_error_cnt = 0
                                 _state.trailing_buy = False
+                                _state.nobuycandles = 0
                                 _state.last_action = "BUY"
                                 _state.action = "DONE"
+                                _app.pvlTime = None
+                                _state.rsi_xma_last = 0
                                 _state.trailing_buy_immediate = False
                                 telegram_bot.add_open_order()
 
@@ -1458,7 +1487,10 @@ def execute_job(
                     _state.buy_count = _state.buy_count + 1
                     _state.buy_sum = _state.buy_sum + _state.last_buy_size
                     _state.trailing_buy = False
+                    _state.nobuycandles = 0
                     _state.action = "DONE"
+                    _app.pvlTime = None
+                    _state.rsi_xma_last = 0
                     _state.trailing_buy_immediate = False
 
                     _app.notifyTelegram(
@@ -1539,7 +1571,7 @@ def execute_job(
                     state.last_api_call_datetime -= timedelta(seconds=60)
 
                 if _app.shouldSaveGraphs():
-                    if _app.setTotalPeriods() < 200:
+                    if len(df) < 200:
                         Logger.info("Trading Graphs can only be generated when dataframe has more than 200 periods.")
                     else:
                         tradinggraphs = TradingGraphs(_technical_analysis)
@@ -1660,6 +1692,8 @@ def execute_job(
                             _state.trade_error_cnt = 0
                             _state.last_action = "SELL"
                             _state.action = "DONE"
+                            _app.pvlTime = None
+                            _state.rsi_xma_last = 0
                                     
                             _app.notifyTelegram(
                                 _app.getMarket()
@@ -1835,6 +1869,8 @@ def execute_job(
                     _state.tsl_trigger = float(_app.trailingStopLossTrigger())
                     _state.tsl_max = False
                     _state.action = "DONE"
+                    _app.pvlTime = None
+                    _state.rsi_xma_last = 0
 
                 if _app.shouldSaveGraphs():
                     tradinggraphs = TradingGraphs(_technical_analysis)
@@ -2146,10 +2182,10 @@ def execute_job(
                     isinstance(_websocket.tickers, pd.DataFrame)
                     and len(_websocket.tickers) == 1
                 )
-                and (
-                    isinstance(_websocket.candles, pd.DataFrame)
-                    and len(_websocket.candles) == _app.setTotalPeriods()
-                )
+#                and (
+#                    isinstance(_websocket.candles, pd.DataFrame)
+#                    and len(_websocket.candles) == _app.setTotalPeriods()
+#                )
             ):
                 # poll every 5 seconds (_websocket)
                 s.enter(

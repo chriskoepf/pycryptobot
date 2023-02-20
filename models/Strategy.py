@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from pandas import DataFrame
 from models.PyCryptoBot import PyCryptoBot
 from models.PyCryptoBot import truncate as _truncate
@@ -189,7 +189,7 @@ class Strategy:
 
         return False
 
-    def isSellSignal(self) -> bool:
+    def isSellSignal(self, margin) -> bool:
         # set to true for verbose debugging
         debug = False
 
@@ -237,6 +237,18 @@ class Strategy:
 
         return False
 
+    def checkPVLTime(self, pvlTime): # -> bool:
+
+        # used to calculate how long the crossover has been in place
+        # currently variables in place for SMA crossovers only
+        # self.app.sma5gtsma10time, self.app.sma10gtsma50time, self.app.sma50gtsma100time
+
+        if pvlTime is None:
+            return (datetime.now().time(),0)
+        else:
+            length = (datetime.combine(date.min,datetime.now().time()) - datetime.combine(date.min, pvlTime))
+            return (pvlTime,length.seconds)
+
     def isSellTrigger(
         self,
         app,
@@ -261,19 +273,58 @@ class Strategy:
         ):
             return False
 
+# original preventloss code
+#                # preventloss - attempt selling before margin drops below 0%
+#        if self.app.preventLoss():
+#            if self.state.prevent_loss is False and margin > self.app.preventLossTrigger():
+#                self.state.prevent_loss = True
+#                Logger.warning(f"{self.app.getMarket()} - reached prevent loss trigger of {self.app.preventLossTrigger()}%.  Watch margin ({self.app.preventLossMargin()}%) to prevent loss.")
+#            elif (
+#                    self.state.prevent_loss is True and margin <= self.app.preventLossMargin()
+#                ) or ( # trigger of 0 disables trigger check and only checks margin set point
+#                    self.app.preventLossTrigger() == 0 and margin <= self.app.preventLossMargin()
+#                ):
+#                Logger.warning(f"{self.app.getMarket()} - time to sell before losing funds! Prevent Loss Activated!")
+#                self.app.notifyTelegram(f"{self.app.getMarket()} - time to sell before losing funds! Prevent Loss Activated!")
+#                return True
+
+# try to add to Custom Strategy Files
+# modified preventloss code.  Move to CS files and replace with original code.
         # preventloss - attempt selling before margin drops below 0%
         if self.app.preventLoss():
-            if self.state.prevent_loss is False and margin > self.app.preventLossTrigger():
+            if margin > self.state.tsl_trigger:
+                self.app.preventloss = False
+            elif margin > self.app.preventLossTrigger():
+                self.state.prevent_loss = False
+                self.app.pvlTime = None
+            else:
                 self.state.prevent_loss = True
-                Logger.warning(f"{self.app.getMarket()} - reached prevent loss trigger of {self.app.preventLossTrigger()}%.  Watch margin ({self.app.preventLossMargin()}%) to prevent loss.")
-            elif (
-                    self.state.prevent_loss is True and margin <= self.app.preventLossMargin()
-                ) or ( # trigger of 0 disables trigger check and only checks margin set point
-                    self.app.preventLossTrigger() == 0 and margin <= self.app.preventLossMargin()
-                ):
-                Logger.warning(f"{self.app.getMarket()} - time to sell before losing funds! Prevent Loss Activated!")
-                self.app.notifyTelegram(f"{self.app.getMarket()} - time to sell before losing funds! Prevent Loss Activated!")
-                return True
+                self.app.pvlTime, length = self.checkPVLTime(self.app.pvlTime)
+#                self.app.notifyTelegram(f"{self.app.getMarket()} - Margin: {margin}, PVL check: {length} seconds")
+
+            if self.state.prevent_loss is True:
+                if length > 7200 and margin < -3:
+                    pvl = True
+#                elif length > 3600 and margin < -1:
+#                    pvl = True
+#                elif length > 2700 and margin < -1.5:
+#                    pvl = True
+                elif length > 3600 and margin < -5:
+                    pvl = True
+                elif length > 1800 and margin < -8:
+                    pvl = True
+                elif length > 900 and margin < 10:
+                    pvl = True
+#                elif length > 120 and margin < -8:
+#                    pvl = True
+                else:
+                    pvl = False
+        #            Logger.warning(f"{self.app.getMarket()} - has not reached prevent loss trigger of {self.app.preventLossTrigger()}%.  Watch margin ({self.app.preventLossMargin()}%) to prevent loss.")
+
+                if pvl is True and self.state.action != "BUY":
+                    Logger.warning(f"{self.app.getMarket()} - Prevent loss sell - Margin: {margin} PVL Timer: {_truncate(length/60,1)}")
+                    self.app.notifyTelegram(f"{self.app.getMarket()} - Prevent loss sell - Margin: {margin} PVL Timer: {_truncate(length/60,1)} mins")
+                    return True
 
         # check sellatloss and nosell bounds before continuing
         if not self.app.allowSellAtLoss() and margin <= 0:
@@ -307,7 +358,7 @@ class Strategy:
                         self.state.tsl_triggered = True
                         self.state.tsl_trigger = round(self.state.tsl_trigger * self.app.TSLTriggerMultiplier())
                         self.state.tsl_pcnt = float(round(self.state.tsl_pcnt * self.app.TSLMultiplier(), 1))
-                        if self.state.tsl_pcnt <= self.app.TSLMaxPcnt(): # has tsl reached it's max setting
+                        if self.state.tsl_pcnt >= self.app.TSLMaxPcnt(): # has tsl reached it's max setting
                             self.state.tsl_max = True
                     # tsl is triggered if margin is high enough
                     elif margin > self.state.tsl_trigger:
@@ -317,7 +368,7 @@ class Strategy:
             else:
                 # loss failsafe sell at trailing_stop_loss
                 if margin > self.state.tsl_trigger:
-                    self.state.tsl_triggered = 1
+                    self.state.tsl_triggered = True
 
             if debug:
                 debugtext = f"TSL Triggered: {self.state.tsl_triggered} TSL Pcnt: {self.state.tsl_pcnt}% TSL Trigger: {self.state.tsl_trigger}%"
@@ -513,11 +564,11 @@ class Strategy:
         debug = False
 
         # if prevent_loss is enabled and activated, don't WAIT
-        if (self.state.prevent_loss is True and margin <= self.app.preventLossMargin()
-           ) or ( # trigger of 0 disables trigger check and only checks margin set point
-                self.app.preventLossTrigger() == 0 and margin <= self.app.preventLossMargin()
-        ):
-            return False
+#        if (self.state.prevent_loss is True and margin <= self.app.preventLossMargin()
+#           ) or ( # trigger of 0 disables trigger check and only checks margin set point
+#                self.app.preventLossTrigger() == 0 and margin <= self.app.preventLossMargin()
+#        ):
+#            return False
 
         if debug and self.state.action != "WAIT":
             Logger.debug("\n*** isWaitTrigger ***\n")
@@ -622,6 +673,7 @@ class Strategy:
             and (self.state.trailing_buy_immediate is True
                 or self.app.trailingImmediateBuy() is True)
             and pricechange > self.app.getTrailingBuyImmediatePcnt()
+            and self.app.buySgnlLength >= 300
         ): # If price increases by more than trailingbuyimmediatepcnt, do an immediate buy
             self.state.action = "BUY"
             immediate_action = True
@@ -634,6 +686,13 @@ class Strategy:
             trailing_action_logtext = f" - Wait Chg: {str(pricechange)}%"
             trailing_action_logtext += f"/{trailingbuypcnt}%" if trailingbuypcnt > 0 else ""
             waitpcnttext += f"Waiting to buy until price of {self.state.waiting_buy_price} increases {trailingbuypcnt}% (+/- 10%) - change {str(pricechange)}%"
+# if continuing to use, add config var for this
+        # if standard buy signal has only been in place X minutes or less, don't buy at close
+        # immediate buys will still occur based on settings above
+        elif self.app.buySgnlLength is None or self.app.buySgnlLength < 300:
+            trailing_action_logtext = f" - Wait < 3m"
+            self.state.action = "WAIT"
+            waitpcnttext += f"Buy signal less than 3 minutes, not safe to buy yet."
         else:
             self.state.action = "BUY"
             trailing_action_logtext = f" - Buy Chg: {str(pricechange)}%/{trailingbuypcnt}%"
@@ -695,6 +754,13 @@ class Strategy:
             else:
                 trailing_action_logtext = f" - Wait Chg: {str(pricechange)}%/{self.app.getTrailingSellPcnt()}%"
                 waitpcnttext += f"Waiting to sell until price of {self.state.waiting_sell_price} decreases {self.app.getTrailingSellPcnt()}% (+/- 10%) - change {str(pricechange)}%"
+# if continuing to use, add config var for this
+        # if standard sell signal has only been in place X minutes or less, don't sell at close
+        # immediate sells will still occur based on settings above
+        elif self.app.sellSgnlLength is None or self.app.sellSgnlLength < 180:
+            trailing_action_logtext = f" - Wait < 3m"
+            self.state.action = "WAIT"
+            waitpcnttext += f"Sell signal less than 3 minutes, don't sell yet."
         else:
             self.state.action = "SELL"
             trailing_action_logtext = f" - Sell Chg: {str(pricechange)}%/{self.app.getTrailingSellPcnt()}%"
@@ -712,14 +778,14 @@ class Strategy:
 
         return self.state.action, self.state.trailing_sell, trailing_action_logtext, immediate_action
 
-    def getAction(self, state, price, current_sim_date, websocket):
+    def getAction(self, df_last, state, price, margin, current_sim_date, websocket):
         self.state = state
         # if Custom Strategy requirements are met, run tradeSignals function and report any errors.
         if self.CS_ready is True:
             # use try/except since this is a customizable file
             try:
                 # indicatorvalues displays indicators in log and telegram if debug is True in CS.tradeSignals
-                indicatorvalues = self.CS.tradeSignals(self._df_last, self._df, current_sim_date, websocket)
+                indicatorvalues = self.CS.tradeSignals(df_last, self._df, current_sim_date, websocket)
             except Exception as err:
                 self.CS_ready = False
                 Logger.warning(f"Custom Strategy Error: {err}")
@@ -728,7 +794,7 @@ class Strategy:
 
         if  self.state.last_action != "BUY" and self.isBuySignal(self.state, price, current_sim_date):
             return "BUY", indicatorvalues
-        elif self.state.last_action not in ["", "SELL"] and self.isSellSignal():
+        elif self.state.last_action not in ["", "SELL"] and self.isSellSignal(margin):
             return "SELL", indicatorvalues
         else:
             return "WAIT", indicatorvalues

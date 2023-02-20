@@ -53,7 +53,7 @@ class AuthAPI(AuthAPIBase):
         api_key="",
         api_secret="",
         api_passphrase="",
-        api_url="https://api.pro.coinbase.com",
+        api_url="https://api.exchange.coinbase.com",
     ) -> None:
         """Coinbase Pro API object model
 
@@ -74,8 +74,8 @@ class AuthAPI(AuthAPIBase):
         self.die_on_api_error = False
 
         valid_urls = [
-            "https://api.pro.coinbase.com",
-            "https://api.pro.coinbase.com/",
+            "https://api.exchange.coinbase.com",
+            "https://api.exchange.coinbase.com/",
             "https://public.sandbox.pro.coinbase.com",
             "https://public.sandbox.pro.coinbase.com/",
         ]
@@ -704,7 +704,7 @@ class PublicAPI(AuthAPIBase):
         # options
         self.debug = False
         self.die_on_api_error = False
-        self._api_url = "https://api.pro.coinbase.com/"
+        self._api_url = "https://api.exchange.coinbase.com/"
 
     def getHistoricalData(
         self,
@@ -740,16 +740,17 @@ class PublicAPI(AuthAPIBase):
             raise TypeError("ISO8601 end integer as string required.")
 
         using_websocket = False
-        if websocket is not None:
-            if websocket.candles is not None:
-                try:
-                    df = websocket.candles.loc[websocket.candles["market"] == market]
-                    using_websocket = True
-                except:
-                    using_websocket = False
+#        if websocket is not None:
+#            if websocket.candles is not None:
+#                try:
+#                    df = websocket.candles.loc[websocket.candles["market"] == market]
+#                    using_websocket = True
+#                except:
+#                    using_websocket = False
 
         # if not using websocket
-        if websocket is None or (websocket is not None and using_websocket is False):
+#        if websocket is None or (websocket is not None and using_websocket is False):
+        if using_websocket is False:
             resp = {}
             trycnt, maxretry = (0, 5)
             while trycnt < maxretry:
@@ -855,17 +856,24 @@ class PublicAPI(AuthAPIBase):
         now = datetime.today().strftime("%Y-%m-%d %H:%M:%S")
 
         if websocket is not None and websocket.tickers is not None:
+
+            ticker_date = None
+            ticker_price = 0
+
             try:
-                row = websocket.tickers.loc[websocket.tickers["market"] == market]
-                ticker_date = datetime.strptime(
-                        re.sub(r".0*$", "", str(row["date"].values[0])),
-                        "%Y-%m-%dT%H:%M:%S",
-                    ).strftime("%Y-%m-%d %H:%M:%S")
-                ticker_price = float(row["price"].values[0])
+#                row = websocket.tickers.loc[websocket.tickers["market"] == market]
+#                ticker_date = datetime.strptime(
+#                        re.sub(r".0*$", "", str(row["date"].values[0])),
+#                        "%Y-%m-%dT%H:%M:%S",
+#                    ).strftime("%Y-%m-%d %H:%M:%S")
+#                ticker_price = float(row["price"].values[0])
+
+                ticker_date = str(websocket.tickers["date"].iloc[-1])
+                ticker_price = float(websocket.tickers["price"].iloc[-1])
 
                 if ticker_date is None:
                     ticker_date = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-    
+
                 return (
                     ticker_date,
                     ticker_price
@@ -1010,15 +1018,15 @@ class WebSocket(AuthAPIBase):
         markets=None,
         # granularity=None,
         granularity: Granularity = Granularity.ONE_HOUR,
-        api_url="https://api.pro.coinbase.com",
+        api_url="https://api.exchange.coinbase.com",
         ws_url="wss://ws-feed.pro.coinbase.com",
     ) -> None:
         # options
         self.debug = False
 
         valid_urls = [
-            "https://api.pro.coinbase.com",
-            "https://api.pro.coinbase.com/",
+            "https://api.exchange.coinbase.com",
+            "https://api.exchange.coinbase.com/",
             "https://public.sandbox.pro.coinbase.com",
             "https://public.sandbox.pro.coinbase.com/",
         ]
@@ -1161,7 +1169,7 @@ class WebSocketClient(WebSocket):
         markets: list = [DEFAULT_MARKET],
         # granularity: str = DEFAULT_GRANULARITY,
         granularity: Granularity = Granularity.ONE_HOUR,
-        api_url="https://api.pro.coinbase.com/",
+        api_url="https://api.exchange.coinbase.com/",
         ws_url: str = "wss://ws-feed.pro.coinbase.com",
     ) -> None:
         if len(markets) == 0:
@@ -1183,8 +1191,8 @@ class WebSocketClient(WebSocket):
             )
 
         valid_urls = [
-            "https://api.pro.coinbase.com",
-            "https://api.pro.coinbase.com/",
+            "https://api.exchange.coinbase.com",
+            "https://api.exchange.coinbase.com/",
             "https://public.sandbox.pro.coinbase.com",
             "https://public.sandbox.pro.coinbase.com/",
         ]
@@ -1226,7 +1234,8 @@ class WebSocketClient(WebSocket):
                 (datetime.now() - self.start_time).total_seconds()
             )
 
-        if "time" in msg and "product_id" in msg and "price" in msg:
+# if any new errors, len(msg) > 0 is new
+        if len(msg) > 0 and "time" in msg and "product_id" in msg and "price" in msg:
             # create dataframe from websocket message
             df = pd.DataFrame(
                 columns=["date", "market", "price"],
@@ -1245,6 +1254,7 @@ class WebSocketClient(WebSocket):
             df["date"] = df["date"].astype("datetime64[ns]")
             df["price"] = df["price"].astype("float64")
 
+            '''
             # form candles
             df["candle"] = df["date"].dt.floor(freq=self.granularity.frequency)
 
@@ -1384,6 +1394,7 @@ class WebSocketClient(WebSocket):
                     self.candles.at[candle.index.values[0], "volume"] = float(
                         candle["volume"].values[0]
                     ) + float(msg["size"])
+            '''
 
             # insert first entry
             if self.tickers is None and len(df) > 0:
@@ -1403,6 +1414,7 @@ class WebSocketClient(WebSocket):
             self.tickers.set_index(tsidx, inplace=True)
             self.tickers.index.name = "ts"
 
+            '''
             # set correct column types
             self.candles["open"] = self.candles["open"].astype("float64")
             self.candles["high"] = self.candles["high"].astype("float64")
@@ -1412,6 +1424,7 @@ class WebSocketClient(WebSocket):
 
             # keep last 300 candles per market
             self.candles = self.candles.groupby("market").tail(300)
+            '''
 
             # print (f'{msg["time"]} {msg["product_id"]} {msg["price"]}')
             # print(json.dumps(msg, indent=4, sort_keys=True))

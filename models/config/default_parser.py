@@ -58,6 +58,18 @@ def defaultConfigParse(app, config):
         else:
             raise TypeError("sim must be of type str")
 
+    if "simstartdate" in config:
+        if isinstance(config["simstartdate"], str):
+            app.simstartdate = config["simstartdate"]
+        else:
+            raise TypeError("simstartdate must be of type str and a date yyyy-mm-dd hh:mm:ss")
+
+    if "simenddate" in config:
+        if isinstance(config["simenddate"], str):
+            app.simenddate = config["simenddate"]
+        else:
+            raise TypeError("simenddate must be of type str and a date yyyy-mm-dd hh:mm:ss")
+
     if "nobuynearhighpcnt" in config:
         if isinstance(config["nobuynearhighpcnt"], (int, float, str)):
             p = re.compile(r"^\-*[0-9\.]{1,5}$")
@@ -581,7 +593,7 @@ def defaultConfigParse(app, config):
 
     if "trailingbuypcnt" in config:
         if isinstance(config["trailingbuypcnt"], (int, float)):
-            if config["trailingbuypcnt"] > 0:
+            if config["trailingbuypcnt"] >= 0:
                 app.trailingbuypcnt = config["trailingbuypcnt"]
         else:
             raise TypeError("trailingbuypcnt must be of type int or float")
@@ -595,7 +607,7 @@ def defaultConfigParse(app, config):
 
     if "trailingbuyimmediatepcnt" in config:
         if isinstance(config["trailingbuyimmediatepcnt"], (int, float)):
-            if config["trailingbuyimmediatepcnt"] > 0:
+            if config["trailingbuyimmediatepcnt"] >= 0:
                 app.trailingbuyimmediatepcnt = config["trailingbuyimmediatepcnt"]
         else:
             raise TypeError("trailingbuyimmediatepcnt must be of type int or float")
