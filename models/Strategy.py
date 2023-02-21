@@ -690,9 +690,9 @@ class Strategy:
         # if standard buy signal has only been in place X minutes or less, don't buy at close
         # immediate buys will still occur based on settings above
         elif self.app.buySgnlLength is None or self.app.buySgnlLength < 300:
-            trailing_action_logtext = f" - Wait < 3m"
+            trailing_action_logtext = f" - Wait < 5m"
             self.state.action = "WAIT"
-            waitpcnttext += f"Buy signal less than 3 minutes, not safe to buy yet."
+            waitpcnttext += f"Buy signal less than 5 minutes, not safe to buy yet."
         else:
             self.state.action = "BUY"
             trailing_action_logtext = f" - Buy Chg: {str(pricechange)}%/{trailingbuypcnt}%"

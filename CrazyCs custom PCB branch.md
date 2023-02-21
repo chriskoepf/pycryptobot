@@ -7,9 +7,14 @@ CrazyC's custom PCB branch
 # models/exchange/kucoin/api.py
 - Kucoin api file modified to disable websockets for getting historical data.  Historical data is pulled via standard api call.
 - Ticker weboscket feed was modified slightly from main code base to process ticker correctly and uses current date of utc-now for time stamp
+- added a 2hr granularity option for KuCoin.
 
 # models/exchange/coinbasepro/api.py
 - edited in the same way as the Kucoin file above
+- changed coinbase api url when Coinbase changed from pro. to exchange.
+
+# models/exchange/Granularity.py
+- added a 2hr granularity option.  May not work on all exchanges, currently only added to KuCoin api file.
 
 # models/AppState.py
 - added additional global variables for use in custom strategies - ultimately need to add a new file for these.  If the file exists, import it so custom variables can be added at will
