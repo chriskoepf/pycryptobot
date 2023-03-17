@@ -277,6 +277,7 @@ class PyCryptoBot(BotConfig):
         iso8601start="",
         iso8601end="",
     ):
+
         if self.exchange == Exchange.BINANCE:
             api = BPublicAPI(api_url=self.getAPIURL())
 
@@ -596,27 +597,55 @@ class PyCryptoBot(BotConfig):
         df = self.df_data[idx][3]
         row = self.df_data[idx][2]
         try:
-            if (
-                len(df) == 0 # empty dataframe
-                or (len(df) > 0
-                    and ( # if exists, only refresh at candleclose
-                        datetime.timestamp(
-                            datetime.utcnow()
-                        ) - granularity.to_integer >= datetime.timestamp(
-                            df["date"].iloc[row]
-                        )
+            if len(df) > 0:
+                # determine time until candle close, for ticker and other check for signals
+                time_until_close = (
+                    datetime.timestamp(
+                        df["date"].iloc[row]
                     )
+                    + granularity.to_integer
+                    - datetime.timestamp(datetime.utcnow())
                 )
-            ):
-                df = self.getHistoricalData(
-                    self.getMarket(), granularity, websocket
-                )
-                row = -1
-            else:
+
+                new_candle = pd.DataFrame()
+
+                if (
+                    time_until_close <= 0
+                    or (datetime.timestamp(df["date"].iloc[-1])
+                            - datetime.timestamp(df["date"].iloc[-2])) > granularity.to_integer
+                ):
+
+                    # if data was already pulled, we only want the last candle
+                    start = datetime.now() -  timedelta(minutes=(granularity.to_integer / 60) * 2)
+                    iso8601start = str(start.isoformat()).split('.')[0]
+
+                    new_candle = self.getHistoricalData(
+                        self.getMarket(), granularity, websocket, iso8601start
+                    )
+
+                if (
+                    len(new_candle) > 0
+                    and (datetime.timestamp(new_candle["date"].iloc[-1]) - datetime.timestamp(df["date"].iloc[-2])) > 0
+                ):
+#                    price = float(new_candle.iloc[-1, new_candle.columns.get_loc['close']])
+                    price = float(new_candle.iloc[-1, new_candle.columns.get_loc('close')])
+                    new_row = False
+
+                    df = self.updateLastDFRow(
+                        df,
+                        new_candle["date"].iloc[-1],
+                        price,
+                        new_row,
+                        new_candle
+                    )
+                    # historical data was updated, reset closed candle row and current price
+                    row = -1
+
                 # if ticker hasn't run yet or hasn't updated, return the original df
-                if websocket is not None and self.ticker_date is None:
+                elif websocket is not None and self.ticker_date is None:
                     return df
-                elif ( # if calling API multiple times, per iteration, ticker may not be updated yet
+                # if calling API multiple times, per iteration, ticker may not be updated yet
+                elif (
                     self.ticker_date is None
                     or datetime.timestamp(
                             datetime.utcnow()
@@ -625,51 +654,99 @@ class PyCryptoBot(BotConfig):
                         )
                 ):
                     return df
+                # if ticker row was already added, last candle close data is 1 row from end of dataframe
+                # once ticker row was added, we update it on each iteration with the new ticker data
                 elif row == -2: # update the new row added for ticker if it is there
-                    df.iloc[-1, df.columns.get_loc('low')] = self.ticker_price if self.ticker_price < df["low"].iloc[-1] else df["low"].iloc[-1]
-                    df.iloc[-1, df.columns.get_loc('high')] = self.ticker_price if self.ticker_price > df["high"].iloc[-1] else df["high"].iloc[-1]
-                    df.iloc[-1, df.columns.get_loc('close')] = self.ticker_price
-                    df.iloc[-1, df.columns.get_loc('date')] = datetime.strptime(self.ticker_date, "%Y-%m-%d %H:%M:%S")
-                    tsidx = pd.DatetimeIndex(df["date"])
-                    df.set_index(tsidx, inplace=True)
-                    df.index.name = "ts"
-                else: # else we are adding a new row for the ticker data
-                    new_row = pd.DataFrame(
-                        columns=[
-                            "date",
-                            "market",
-                            "granularity",
-                            "open",
-                            "high",
-                            "close",
-                            "low",
-                            "volume",
-                        ],
-                        data=[
-                            [
-                                datetime.strptime(self.ticker_date, "%Y-%m-%d %H:%M:%S"),
-                                df["market"].iloc[-1],
-                                df["granularity"].iloc[-1],
-                                (self.ticker_price if self.ticker_price < df["close"].iloc[-1] else df["close"].iloc[-1]),
-                                (self.ticker_price if self.ticker_price > df["close"].iloc[-1] else df["close"].iloc[-1]),
-                                df["close"].iloc[-1],
-                                self.ticker_price,
-                                df["volume"].iloc[-1]
-                            ]
-                        ]
+                    df = self.updateLastDFRow(
+                        df,
+                        self.ticker_date,
+                        self.ticker_price,
                     )
-                    df = pd.concat([df, new_row], ignore_index = True)
-
-                    tsidx = pd.DatetimeIndex(df["date"])
-                    df.set_index(tsidx, inplace=True)
-                    df.index.name = "ts"
+                else: # else we are adding a new row for the ticker data
+                    df = self.updateLastDFRow(
+                        df,
+                        self.ticker_date,
+                        self.ticker_price,
+                        True
+                    )
                     row = -2
+            # this dataframe does not exist, create it
+            else:
+                df = self.getHistoricalData(
+                    self.getMarket(), granularity, websocket
+                )
+                row = -1
 
             self.df_data[idx][3] = df
             self.df_data[idx][2] = row
             return df
         except Exception as err:
             raise Exception(f"Additional DF Error: {err}")
+
+    def updateLastDFRow(
+        self,
+        df,
+        date,
+        price,
+        new_row: bool=False,
+        new_data=pd.DataFrame()
+    ) -> pd.DataFrame:
+        ''' This is called by ticker code to add a new row to the dataframe after candle close '''
+
+        if len(new_data) > 0:
+            # candle close - new data retrieved
+            df.iloc[-1, df.columns.get_loc('low')] = new_data["low"].iloc[-1]
+            df.iloc[-1, df.columns.get_loc('high')] = new_data["high"].iloc[-1]
+            df.iloc[-1, df.columns.get_loc('close')] = new_data["close"].iloc[-1]
+            df.iloc[-1, df.columns.get_loc('date')] = new_data["date"].iloc[-1]
+            df.iloc[-1, df.columns.get_loc('volume')] = new_data["volume"].iloc[-1]
+
+        elif new_row is False:
+            # update existing row with new ticker data
+            df.iloc[-1, df.columns.get_loc('low')] = price if price < df["low"].iloc[-1] else df["low"].iloc[-1]
+            df.iloc[-1, df.columns.get_loc('high')] = price if price > df["high"].iloc[-1] else df["high"].iloc[-1]
+            df.iloc[-1, df.columns.get_loc('close')] = price
+            df.iloc[-1, df.columns.get_loc('date')] = datetime.strptime(date, "%Y-%m-%d %H:%M:%S")
+            tsidx = pd.DatetimeIndex(df["date"])
+            df.set_index(tsidx, inplace=True)
+            df.index.name = "ts"
+        else:
+            # else we are adding a new row for the ticker data
+            row = pd.DataFrame(
+                columns=[
+                    "date",
+                    "market",
+                    "granularity",
+                    "open",
+                    "high",
+                    "close",
+                    "low",
+                    "volume",
+                ],
+                data=[
+                    [
+                        datetime.strptime(date, "%Y-%m-%d %H:%M:%S"),
+                        df["market"].iloc[-1],
+                        df["granularity"].iloc[-1],
+                        (price if price < df["close"].iloc[-1] else df["close"].iloc[-1]),
+                        (price if price > df["close"].iloc[-1] else df["close"].iloc[-1]),
+                        df["close"].iloc[-1],
+                        price,
+                        df["volume"].iloc[-1]
+                    ]
+                ]
+            )
+            
+            # concat(merge) new row onto end of dataframe
+            df = pd.concat([df, row], ignore_index = True)
+            # drop first row of df to prevent it from continuously growing
+            df = df.iloc[1:]
+
+        tsidx = pd.DatetimeIndex(df["date"])
+        df.set_index(tsidx, inplace=True)
+        df.index.name = "ts"
+
+        return df
 
     def is1hEMA1226Bull(self, iso8601end: str = "", websocket=None):
         try:

@@ -36,10 +36,11 @@ SUPPORTED_GRANULARITY = [
     "30min",
     "1hour",
     "2hour",
+    "4hour",
     "6hour",
     "1day",
 ]
-FREQUENCY_EQUIVALENTS = ["T", "5T", "15T", "H", "2H", "6H", "D"]
+FREQUENCY_EQUIVALENTS = ["T", "5T", "15T", "H", "2H", "4H", "6H", "D"]
 MAX_GRANULARITY = max(SUPPORTED_GRANULARITY)
 DEFAULT_MARKET = "BTC-USDT"
 

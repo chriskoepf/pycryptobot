@@ -121,7 +121,6 @@ def execute_job(
             text_box.center(f"Restarting Bot {_app.getMarket()}")
             text_box.singleLine()
             Logger.debug("Restarting Bot.")
-            # print(str(datetime.now()).format() + " - Bot has restarted")
             _app.notifyTelegram(f"{_app.getMarket()} bot has restarted")
             telegram_bot.updatebotstatus("active")
             _app.read_config(_app.getExchange())
@@ -182,8 +181,19 @@ def execute_job(
         # check if data exists in the dataframe, get historical data if it doesn't and only refresh historical data at candle close.
         # _state.closed_candle_row is -1 if new historical data added and -2 when ticker row has been added
 
-        # determine time until candle close, for ticker and other check for signals
+        # if data already exists, only update last row
         if len(trading_data) > 0:
+            # get ticker data and add/update current candle
+            ticker = _app.getTicker(_app.getMarket(), _websocket)
+            # if ticker returns 0, use last close value as price
+            if ticker[1] == 0:
+                price = trading_data["close"].iloc[-1]
+            else:
+                price = ticker[1]
+            _app.ticker_date = ticker[0]
+            _app.ticker_price = price
+
+            # determine time until candle close, for ticker and other check for signals
             _state.time_until_close = (
                 datetime.timestamp(
                     trading_data.iloc[_state.closed_candle_row, trading_data.columns.get_loc('date')]
@@ -192,11 +202,63 @@ def execute_job(
                 - datetime.timestamp(datetime.utcnow())
             )
 
-        # when we reach candle close, get historical data
-        if (
-            len(trading_data) == 0
-            or _state.time_until_close <= 0
-        ):
+            new_candle = pd.DataFrame()
+
+            # historical data already exists, only get the last candle
+            if (
+                _state.time_until_close <= 0
+                or (datetime.timestamp(trading_data["date"].iloc[-1])
+                        - datetime.timestamp(trading_data["date"].iloc[-2])) > _app.getGranularity().to_integer
+            ):
+
+                # if data was already pulled, we only want the last candle
+                start = datetime.now() -  timedelta(minutes=(_app.getGranularity().to_integer / 60) * 2)
+                iso8601start = str(start.isoformat()).split('.')[0]
+
+# change this after adding websocket historical data
+                if  last_api_call_datetime.seconds > 20:
+                    new_candle = _app.getHistoricalData(
+                        _app.getMarket(), _app.getGranularity(), _websocket, iso8601start
+                    )
+
+            if (
+                len(new_candle) > 0 
+                and (datetime.timestamp(new_candle["date"].iloc[-1]) - datetime.timestamp(trading_data["date"].iloc[-2])) > 0
+            ):
+                price = float(new_candle.iloc[-1, new_candle.columns.get_loc('close')])
+                trading_data = _app.updateLastDFRow(
+                    trading_data,
+                    new_candle["date"].iloc[-1],
+                    price,
+                    False,
+                    new_candle
+                )
+                # historical data was updated, reset closed candle row and current price
+                _state.closed_candle_row = -1
+
+            # if ticker row was already added, last candle close data is 1 row from end of dataframe
+            # once ticker row was added, we update it on each iteration with the new ticker data
+            elif _state.closed_candle_row == -2:
+                trading_data = _app.updateLastDFRow(
+                    trading_data,
+                    ticker[0],
+                    price,
+                    False
+                )
+
+            else:
+                # ticker row was not already added and needs to be created with last candle and current ticker data
+                trading_data = _app.updateLastDFRow(
+                    trading_data,
+                    ticker[0],
+                    price,
+                    True
+                )
+                # set last closed row
+                _state.closed_candle_row = -2
+
+        # no data exists, let get historical data
+        else:
             trading_data = _app.getHistoricalData(
                 _app.getMarket(), _app.getGranularity(), _websocket
             )
@@ -204,48 +266,6 @@ def execute_job(
             _state.closed_candle_row = -1
             price = float(trading_data.iloc[-1, trading_data.columns.get_loc('close')])
 
-        # once dataframe exists, add ticker data to a new row and update on each iteration, except candle close
-        else: 
-            # set time and price with ticker data and add/update current candle
-            ticker = _app.getTicker(_app.getMarket(), _websocket)
-            # if ticker returns 0, use last close value as price
-            if ticker[1] == 0:
-                price = trading_data["close"].iloc[-1]
-            else:
-                price = ticker[1]
-#            print(price)
-            _app.ticker_date = ticker[0]
-            _app.ticker_price = price
-            # if ticker row was already added, last candle close data is 1 row from end of dataframe
-            # once ticker row was added, we update it on each iteration with the new ticker data
-            if _state.closed_candle_row == -2:
-                trading_data.iloc[-1, trading_data.columns.get_loc('low')] = price if price < trading_data["low"].iloc[-1] else trading_data["low"].iloc[-1]
-                trading_data.iloc[-1, trading_data.columns.get_loc('high')] = price if price > trading_data["high"].iloc[-1] else trading_data["high"].iloc[-1]
-                trading_data.iloc[-1, trading_data.columns.get_loc('close')] = price
-                trading_data.iloc[-1, trading_data.columns.get_loc('date')] = datetime.strptime(ticker[0], "%Y-%m-%d %H:%M:%S")
-                tsidx = pd.DatetimeIndex(trading_data["date"])
-                trading_data.set_index(tsidx, inplace=True)
-                trading_data.index.name = "ts"
-            # ticker row was not already added and needs to be created with last candle and current ticker data
-            else:
-                trading_data.loc[len(trading_data.index)] = [
-                    datetime.strptime(ticker[0], "%Y-%m-%d %H:%M:%S"),
-                    trading_data["market"].iloc[-1],
-                    trading_data["granularity"].iloc[-1],
-                    (price if price < trading_data["close"].iloc[-1] else trading_data["close"].iloc[-1]),
-                    (price if price > trading_data["close"].iloc[-1] else trading_data["close"].iloc[-1]),
-                    trading_data["close"].iloc[-1],
-                    price,
-                    trading_data["volume"].iloc[-1]
-                ] 
-
-                tsidx = pd.DatetimeIndex(trading_data["date"])
-                trading_data.set_index(tsidx, inplace=True)
-                trading_data.index.name = "ts"
-                _state.closed_candle_row = -2
-
-#        print(trading_data)
-#        print(trading_data["close"].iloc[-1])
     else:
         price = float(df_last["close"].values[0])
         if len(trading_data) == 0:
@@ -546,12 +566,19 @@ def execute_job(
             if _state.action == "check_action" and _state.last_action == "BUY":
                 _state.trade_error_cnt = 0
                 _state.trailing_buy = False
-                _state.nobuycandles = 0
                 _state.action = None
                 _state.trailing_buy_immediate = False
                 _app.pvlTime = None
                 _state.rsi_xma_last = 0
                 telegram_bot.add_open_order()
+# custom candle count since last buy
+                if _state.candles_since_buy == None and _state.closed_candle_row != -1:
+                    _state.candles_since_buy = 0
+                elif _state.candles_since_buy == None and _state.closed_candle_row == -1:
+                    _state.candles_since_buy = 1
+                else:
+                    _state.candles_since_buy += 1
+
 
                 Logger.warning(
                     f"{_app.getMarket()} ({_app.printGranularity}) - {datetime.today().strftime('%Y-%m-%d %H:%M:%S')}\n"
@@ -582,6 +609,7 @@ def execute_job(
                 _app.pvlTime = None
                 _state.rsi_xma_last = 0
                 telegram_bot.remove_open_order()
+                _state.candles_since_buy = None
 
                 Logger.warning(
                     f"{_app.getMarket()} ({_app.printGranularity}) - {datetime.today().strftime('%Y-%m-%d %H:%M:%S')}\n"
@@ -615,6 +643,7 @@ def execute_job(
                 f"{_app.getMarket()} is unsuitable for trading, quote price is less than 0.000001!"
             )
 
+        '''
         # technical indicators
         ema12gtema26 = bool(df_last["ema12gtema26"].values[0])
         ema12gtema26co = bool(df_last["ema12gtema26co"].values[0])
@@ -629,6 +658,9 @@ def execute_job(
         obv_pc = float(df_last["obv_pc"].values[0])
         elder_ray_buy = bool(df_last["eri_buy"].values[0])
         elder_ray_sell = bool(df_last["eri_sell"].values[0])
+        '''
+
+        goldencross = bool(df_last["goldencross"].values[0])
 
         # if simulation, set goldencross based on actual sim date
         if _app.isSimulation():
@@ -637,6 +669,9 @@ def execute_job(
             else:
                 goldencross = _app.is1hSMA50200Bull(current_sim_date, _websocket)
 
+# custom option for candlesticks
+# using custom strategy not enabled for the moment, need addtion config setting
+        '''
         # candlestick detection
         hammer = bool(df_last["hammer"].values[0])
         inverted_hammer = bool(df_last["inverted_hammer"].values[0])
@@ -662,6 +697,10 @@ def execute_job(
             telegram_bot.addindicators("MACD", macdgtsignal or macdgtsignalco)
         if not _app.disableBuyOBV():
             telegram_bot.addindicators("OBV", float(obv_pc) > 0)
+        '''
+
+        if _app.disableBullOnly():
+            telegram_bot.addindicators("BULL", goldencross)
 
         if _app.isSimulation():
             # Reset the Strategy so that the last record is the current sim date
@@ -700,6 +739,10 @@ def execute_job(
                 change_pcnt_high = ((price / _state.last_buy_high) - 1) * 100
             else:
                 change_pcnt_high = 0
+
+# custom candle count since last buy
+            if _state.candles_since_buy != None and _state.closed_candle_row == -1:
+                _state.candles_since_buy += 1
 
             # buy and sell calculations
             _state.last_buy_fee = round(_state.last_buy_size * _app.getTakerFee(), 8)
@@ -753,8 +796,8 @@ def execute_job(
                 _technical_analysis.getTradeExit(price),
                 margin,
                 change_pcnt_high,
-                obv_pc,
-                macdltsignal,
+#                obv_pc,
+#                macdltsignal,
             ):
                 _state.action = "SELL"
                 immediate_action = True
@@ -774,7 +817,7 @@ def execute_job(
 
         # If sell signal, save the price and check for decrease/increase before selling.
         if _state.action == "SELL" and immediate_action is not True and _app.getTrailingSellPcnt() <= 0:
-            _state.action, _state.trailing_sell, trailing_action_logtext, immediate_action = strategy.checkTrailingSell(_state, price)
+            _state.action, _state.trailing_sell, trailing_action_logtext, immediate_action = strategy.checkTrailingSell(_state, price, margin)
 
         if _app.manualTradesOnly() is True:
             _state.action = "WAIT"
@@ -856,44 +899,47 @@ def execute_job(
                 else:
                     _state.eri_text = "ERI: | "
             log_text = ""
-            if hammer is True:
-                log_text = '* Candlestick Detected: Hammer ("Weak - Reversal - Bullish Signal - Up")'
+# custom option for candlesticks
+# using custom strategy not enabled for the moment, need addtion config setting
+            if app.enableCustomStrategy() is False:
+                if hammer is True:
+                    log_text = '* Candlestick Detected: Hammer ("Weak - Reversal - Bullish Signal - Up")'
 
-            if shooting_star is True:
-                log_text = '* Candlestick Detected: Shooting Star ("Weak - Reversal - Bearish Pattern - Down")'
+                if shooting_star is True:
+                    log_text = '* Candlestick Detected: Shooting Star ("Weak - Reversal - Bearish Pattern - Down")'
 
-            if hanging_man is True:
-                log_text = '* Candlestick Detected: Hanging Man ("Weak - Continuation - Bearish Pattern - Down")'
+                if hanging_man is True:
+                    log_text = '* Candlestick Detected: Hanging Man ("Weak - Continuation - Bearish Pattern - Down")'
 
-            if inverted_hammer is True:
-                log_text = '* Candlestick Detected: Inverted Hammer ("Weak - Continuation - Bullish Pattern - Up")'
+                if inverted_hammer is True:
+                    log_text = '* Candlestick Detected: Inverted Hammer ("Weak - Continuation - Bullish Pattern - Up")'
 
-            if three_white_soldiers is True:
-                log_text = '*** Candlestick Detected: Three White Soldiers ("Strong - Reversal - Bullish Pattern - Up")'
+                if three_white_soldiers is True:
+                    log_text = '*** Candlestick Detected: Three White Soldiers ("Strong - Reversal - Bullish Pattern - Up")'
 
-            if three_black_crows is True:
-                log_text = '* Candlestick Detected: Three Black Crows ("Strong - Reversal - Bearish Pattern - Down")'
+                if three_black_crows is True:
+                    log_text = '* Candlestick Detected: Three Black Crows ("Strong - Reversal - Bearish Pattern - Down")'
 
-            if morning_star is True:
-                log_text = '*** Candlestick Detected: Morning Star ("Strong - Reversal - Bullish Pattern - Up")'
+                if morning_star is True:
+                    log_text = '*** Candlestick Detected: Morning Star ("Strong - Reversal - Bullish Pattern - Up")'
 
-            if evening_star is True:
-                log_text = '*** Candlestick Detected: Evening Star ("Strong - Reversal - Bearish Pattern - Down")'
+                if evening_star is True:
+                    log_text = '*** Candlestick Detected: Evening Star ("Strong - Reversal - Bearish Pattern - Down")'
 
-            if three_line_strike is True:
-                log_text = '** Candlestick Detected: Three Line Strike ("Reliable - Reversal - Bullish Pattern - Up")'
+                if three_line_strike is True:
+                    log_text = '** Candlestick Detected: Three Line Strike ("Reliable - Reversal - Bullish Pattern - Up")'
 
-            if abandoned_baby is True:
-                log_text = '** Candlestick Detected: Abandoned Baby ("Reliable - Reversal - Bullish Pattern - Up")'
+                if abandoned_baby is True:
+                    log_text = '** Candlestick Detected: Abandoned Baby ("Reliable - Reversal - Bullish Pattern - Up")'
 
-            if morning_doji_star is True:
-                log_text = '** Candlestick Detected: Morning Doji Star ("Reliable - Reversal - Bullish Pattern - Up")'
+                if morning_doji_star is True:
+                    log_text = '** Candlestick Detected: Morning Doji Star ("Reliable - Reversal - Bullish Pattern - Up")'
 
-            if evening_doji_star is True:
-                log_text = '** Candlestick Detected: Evening Doji Star ("Reliable - Reversal - Bearish Pattern - Down")'
+                if evening_doji_star is True:
+                    log_text = '** Candlestick Detected: Evening Doji Star ("Reliable - Reversal - Bearish Pattern - Down")'
 
-            if two_black_gapping is True:
-                log_text = '*** Candlestick Detected: Two Black Gapping ("Reliable - Reversal - Bearish Pattern - Down")'
+                if two_black_gapping is True:
+                    log_text = '*** Candlestick Detected: Two Black Gapping ("Reliable - Reversal - Bearish Pattern - Down")'
 
             if (
                 log_text != ""
@@ -1009,7 +1055,7 @@ def execute_job(
                     else:
                         df_high = df[df["date"] <= current_sim_date]["close"].max()
                         df_low = df[df["date"] <= current_sim_date]["close"].min()
-                        # print(df_high)
+
                         output_text = (
                             formatted_current_df_index
                             + " | "
@@ -1217,6 +1263,7 @@ def execute_job(
 
                 if debug:
                     Logger.debug(f"price: {truncate(price)}")
+                    '''
                     Logger.debug(f'ema12: {truncate(float(df_last["ema12"].values[0]))}')
                     Logger.debug(f'ema26: {truncate(float(df_last["ema26"].values[0]))}')
                     Logger.debug(f"ema12gtema26co: {str(ema12gtema26co)}")
@@ -1233,6 +1280,7 @@ def execute_job(
                     Logger.debug(f"macdltsignal: {str(macdltsignal)}")
                     Logger.debug(f"obv: {str(obv)}")
                     Logger.debug(f"obv_pc: {str(obv_pc)}")
+                    '''
                     Logger.debug(f"action: {_state.action}")
 
                 # informational output on the most recent entry
@@ -1242,6 +1290,7 @@ def execute_job(
                 text_box.line("Timestamp", str(df_last.index.format()[0]))
                 text_box.singleLine()
                 text_box.line("Close", truncate(price))
+                '''
                 text_box.line("EMA12", truncate(float(df_last["ema12"].values[0])))
                 text_box.line("EMA26", truncate(float(df_last["ema26"].values[0])))
                 text_box.line("Crossing Above", str(ema12gtema26co))
@@ -1298,6 +1347,7 @@ def execute_job(
                     )
                 else:
                     text_box.line("Condition", "-")
+                '''
 
                 text_box.singleLine()
                 text_box.line("Action", _state.action)
@@ -1403,13 +1453,18 @@ def execute_job(
                             if bal_error == 0:
                                 _state.trade_error_cnt = 0
                                 _state.trailing_buy = False
-                                _state.nobuycandles = 0
                                 _state.last_action = "BUY"
                                 _state.action = "DONE"
                                 _app.pvlTime = None
                                 _state.rsi_xma_last = 0
                                 _state.trailing_buy_immediate = False
                                 telegram_bot.add_open_order()
+# custom candle count since last buy
+                                if _state.closed_candle_row == -1:
+                                    _state.candles_since_buy = 1
+                                else:
+                                    _state.candles_since_buy = 0
+
 
                                 Logger.info(
                                     f"{_app.getBaseCurrency()} balance after order: {str(account.basebalance_after)}\n"
@@ -1487,11 +1542,14 @@ def execute_job(
                     _state.buy_count = _state.buy_count + 1
                     _state.buy_sum = _state.buy_sum + _state.last_buy_size
                     _state.trailing_buy = False
-                    _state.nobuycandles = 0
                     _state.action = "DONE"
                     _app.pvlTime = None
-                    _state.rsi_xma_last = 0
                     _state.trailing_buy_immediate = False
+# custom candle count since last buy
+                    if _state.closed_candle_row == -1:
+                        _state.candles_since_buy = 1
+                    else:
+                        _state.candles_since_buy = 0
 
                     _app.notifyTelegram(
                         _app.getMarket()
@@ -1693,7 +1751,7 @@ def execute_job(
                             _state.last_action = "SELL"
                             _state.action = "DONE"
                             _app.pvlTime = None
-                            _state.rsi_xma_last = 0
+                            _state.candles_since_buy = None
                                     
                             _app.notifyTelegram(
                                 _app.getMarket()
@@ -1870,7 +1928,7 @@ def execute_job(
                     _state.tsl_max = False
                     _state.action = "DONE"
                     _app.pvlTime = None
-                    _state.rsi_xma_last = 0
+                    _state.candles_since_buy = None
 
                 if _app.shouldSaveGraphs():
                     tradinggraphs = TradingGraphs(_technical_analysis)
@@ -2238,6 +2296,8 @@ def main():
 
         smartswitchstatus = "enabled" if app.getSmartSwitch() else "disabled"
         message += f" for {app.getMarket()} using granularity {app.printGranularity()}. Smartswitch {smartswitchstatus}"
+# custom message
+        message += f",  Sellatloss: {bool(app.sell_at_loss)}"
 
         if app.startmethod in ("standard", "telegram"):
             app.notifyTelegram(message)

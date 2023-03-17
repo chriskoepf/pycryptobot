@@ -100,11 +100,8 @@ class AppState:
         self.waiting_sell_price = 0
         self.closed_candle_row = -1
 # new variables added for custom strategies
-        self.nobuycandles = 0
         self.time_until_close = 0
-#        self.rsi_xlwr_last = 0
-#        self.rsi_xupr_last = 0
-#        self.rsi_xma_last = 0
+        self.candles_since_buy = None
 
     def minimumOrderBase(self, base, balancechk: bool = False):
         self.app.insufficientfunds = False

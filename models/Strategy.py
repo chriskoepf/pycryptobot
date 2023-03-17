@@ -195,7 +195,7 @@ class Strategy:
 
         # additional sell signals - add additional functions and calls as necessary
         if self.CS_ready:
-            if self.CS.sellSignal():
+            if self.CS.sellSignal(margin):
                 return True
             else:
                 # If Custom Strategy active, don't process standard signals, return False
@@ -269,7 +269,7 @@ class Strategy:
         if ( # Custom Strategy loaded
             self.CS_ready
             and self.app.sellTriggerOverride() is True
-            and self.CS.buy_pts >= self.CS.sell_override_pts
+            and self.CS.override_pts >= self.CS.sell_override_pts
         ):
             return False
 
@@ -303,18 +303,18 @@ class Strategy:
 #                self.app.notifyTelegram(f"{self.app.getMarket()} - Margin: {margin}, PVL check: {length} seconds")
 
             if self.state.prevent_loss is True:
-                if length > 7200 and margin < -3:
+                if length > 10800 and margin < 0:
                     pvl = True
-#                elif length > 3600 and margin < -1:
+                elif length > 7200 and margin < -1:
+                    pvl = True
+#                elif length > 300 and margin < -3:
 #                    pvl = True
-#                elif length > 2700 and margin < -1.5:
+#                elif length > 3600 and margin < -5:
 #                    pvl = True
-                elif length > 3600 and margin < -5:
-                    pvl = True
-                elif length > 1800 and margin < -8:
-                    pvl = True
-                elif length > 900 and margin < 10:
-                    pvl = True
+#                elif length > 1800 and margin < -8:
+#                    pvl = True
+#                elif length > 900 and margin < 10:
+#                    pvl = True
 #                elif length > 120 and margin < -8:
 #                    pvl = True
                 else:
@@ -673,7 +673,8 @@ class Strategy:
             and (self.state.trailing_buy_immediate is True
                 or self.app.trailingImmediateBuy() is True)
             and pricechange > self.app.getTrailingBuyImmediatePcnt()
-            and self.app.buySgnlLength >= 300
+# add config option at some point
+            and self.app.buySgnlLength >= 180 # added check to see if signal has been in place X seconds
         ): # If price increases by more than trailingbuyimmediatepcnt, do an immediate buy
             self.state.action = "BUY"
             immediate_action = True
@@ -706,7 +707,7 @@ class Strategy:
 
         return self.state.action, self.state.trailing_buy, trailing_action_logtext, immediate_action
 
-    def checkTrailingSell(self, state, price):
+    def checkTrailingSell(self, state, price, margin):
 
         debug = False
 
@@ -754,17 +755,33 @@ class Strategy:
             else:
                 trailing_action_logtext = f" - Wait Chg: {str(pricechange)}%/{self.app.getTrailingSellPcnt()}%"
                 waitpcnttext += f"Waiting to sell until price of {self.state.waiting_sell_price} decreases {self.app.getTrailingSellPcnt()}% (+/- 10%) - change {str(pricechange)}%"
+# custom sell if margin goes negative on first candle after buy
+        elif (
+            self.state.candles_since_buy is not None
+            and self.state.candles_since_buy <= 1
+            and margin < 0
+            and self.app.sellSgnlLength is not None
+            and self.app.sellSgnlLength >= 180
+        ):
+            self.state.action = "SELL"
+#            immediate_action = True
+            trailing_action_logtext = f" Sell - Margin is < 0% on 1st candle after buy."
+            waitpcnttext += f"Sell at close, Margin is < 0% on 1st candle after buy."
+            #self.app.notifyTelegram(waitpcnttext)
 # if continuing to use, add config var for this
         # if standard sell signal has only been in place X minutes or less, don't sell at close
         # immediate sells will still occur based on settings above
         elif self.app.sellSgnlLength is None or self.app.sellSgnlLength < 180:
-            trailing_action_logtext = f" - Wait < 3m"
             self.state.action = "WAIT"
+            trailing_action_logtext = f" - Wait < 3m"
             waitpcnttext += f"Sell signal less than 3 minutes, don't sell yet."
         else:
             self.state.action = "SELL"
             trailing_action_logtext = f" - Sell Chg: {str(pricechange)}%/{self.app.getTrailingSellPcnt()}%"
             waitpcnttext += f"Sell at Close. Price of {self.state.waiting_sell_price}, change of {str(pricechange)}%, is lower than setting of {str(self.app.getTrailingSellPcnt())}% (+/- 10%)"
+            if self.CS_ready: # Custom Strategy loaded
+                trailing_action_logtext += self.CS.logtext 
+                waitpcnttext += self.CS.logtext
 
         if self.app.isVerbose() and (
             not self.app.isSimulation()
