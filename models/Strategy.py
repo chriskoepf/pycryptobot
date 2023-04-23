@@ -291,6 +291,7 @@ class Strategy:
 # try to add to Custom Strategy Files
 # modified preventloss code.  Move to CS files and replace with original code.
         # preventloss - attempt selling before margin drops below 0%
+        length = 0
         if self.app.preventLoss():
             if margin > self.state.tsl_trigger:
                 self.app.preventloss = False

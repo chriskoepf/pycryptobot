@@ -2238,7 +2238,7 @@ def execute_job(
                 and _websocket is not None
                 and (
                     isinstance(_websocket.tickers, pd.DataFrame)
-                    and len(_websocket.tickers) == 1
+                    and len(_websocket.tickers) > 1
                 )
 #                and (
 #                    isinstance(_websocket.candles, pd.DataFrame)
@@ -2294,10 +2294,10 @@ def main():
                 _websocket = KWebSocketClient([app.getMarket()], app.getGranularity())
                 _websocket.start()
 
-        smartswitchstatus = "enabled" if app.getSmartSwitch() else "disabled"
-        message += f" for {app.getMarket()} using granularity {app.printGranularity()}. Smartswitch {smartswitchstatus}"
+#        smartswitchstatus = "enabled" if app.getSmartSwitch() else "disabled"
 # custom message
-        message += f",  Sellatloss: {bool(app.sell_at_loss)}"
+        message += f" : {app.getMarket()} - {app.printGranularity()}" #. Smartswitch {smartswitchstatus}"
+#        message += f",  Sellatloss: {bool(app.sell_at_loss)}"
 
         if app.startmethod in ("standard", "telegram"):
             app.notifyTelegram(message)

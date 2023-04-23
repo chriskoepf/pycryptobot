@@ -157,8 +157,6 @@ telegram_logs
 config-*.yaml
 telegram_data/*
 screener.json
-models/Strategy_myCS.py
-models/Trading_myPta.py
 
 # WIP
 models/exchange/kraken
